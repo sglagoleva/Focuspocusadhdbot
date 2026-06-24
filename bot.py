@@ -143,8 +143,15 @@ def init_db():
         gender TEXT DEFAULT 'M',
         focus TEXT DEFAULT '',
         streak TEXT DEFAULT '[]',
-        last_skill_date TEXT DEFAULT ''
+        last_skill_date TEXT DEFAULT '',
+        buddy_name TEXT DEFAULT ''
     )""")
+    # Добавить колонку buddy_name если её нет (для старых БД)
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN buddy_name TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
     c.execute("""CREATE TABLE IF NOT EXISTS diary (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER, date TEXT, block TEXT, data TEXT
@@ -157,6 +164,15 @@ def init_db():
         created TEXT
     )""")
     conn.commit(); conn.close()
+
+def get_all_users():
+    """Вернуть всех зарегистрированных пользователей (у кого есть имя)."""
+    conn = sqlite3.connect("adhd.db")
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE name != ''")
+    rows = c.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
 def get_user(uid):
     conn = sqlite3.connect("adhd.db")
@@ -866,41 +882,42 @@ async def buddy_ping(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ── MIDDAY NOTIFICATION ─────────────────────────────────────────────────────
 async def midday_notification(app):
     """13:00 — дневной чекин с реальными ситуациями из тренинга."""
-    if not NOTIFY_USER_ID: return
-    try:
-        uid = NOTIFY_USER_ID
-        user = get_user(uid)
-        morning = get_diary(uid, "morning")
+    user_ids = get_all_users()
+    for uid in user_ids:
+        try:
+            user = get_user(uid)
+            morning = get_diary(uid, "morning")
 
-        if not morning:
+            if not morning:
+                await app.bot.send_message(uid,
+                    f"☕ *{user['name']}, как дела?*\n\nУтренний дневник не заполнен — и это нормально. Как сейчас?",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Всё хорошо", callback_data="mid_ok")],
+                        [InlineKeyboardButton("🤖 Нужна помощь", callback_data="mid_coach")],
+                    ])
+                )
+                continue
+
+            tasks = build_tasks_summary(morning)
             await app.bot.send_message(uid,
-                f"☕ *{user['name']}, как дела?*\n\nУтренний дневник не заполнен — и это нормально. Как сейчас?",
+                f"☕ *Дневной чекин, {user['name']}!*\n\n"
+                f"Твои задачи:\n{tasks}\n\nКак идут дела?",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ Всё хорошо", callback_data="mid_ok")],
-                    [InlineKeyboardButton("🤖 Нужна помощь", callback_data="mid_coach")],
+                    [InlineKeyboardButton("✅ Всё по плану", callback_data="mid_ok")],
+                    [InlineKeyboardButton("❓ Непонятно с чего начать", callback_data="mid_nostart")],
+                    [InlineKeyboardButton("😰 Задача подавляет/пугает", callback_data="mid_scary")],
+                    [InlineKeyboardButton("⏳ Жду подходящего момента", callback_data="mid_waiting")],
+                    [InlineKeyboardButton("🎯 Боюсь сделать плохо", callback_data="mid_perfect")],
+                    [InlineKeyboardButton("🧱 Внутреннее сопротивление", callback_data="mid_resist")],
+                    [InlineKeyboardButton("⚡ Мало времени", callback_data="mid_time")],
+                    [InlineKeyboardButton("📱 Залип(ла) в телефоне", callback_data="mid_phone")],
+                    [InlineKeyboardButton("🤖 Коуч", callback_data="mid_coach")],
                 ])
             )
-            return
-
-        tasks = build_tasks_summary(morning)
-        await app.bot.send_message(uid,
-            f"☕ *Дневной чекин, {user['name']}!*\n\n"
-            f"Твои задачи:\n{tasks}\n\nКак идут дела?",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Всё по плану", callback_data="mid_ok")],
-                [InlineKeyboardButton("❓ Непонятно с чего начать", callback_data="mid_nostart")],
-                [InlineKeyboardButton("😰 Задача подавляет/пугает", callback_data="mid_scary")],
-                [InlineKeyboardButton("⏳ Жду подходящего момента", callback_data="mid_waiting")],
-                [InlineKeyboardButton("🎯 Боюсь сделать плохо", callback_data="mid_perfect")],
-                [InlineKeyboardButton("🧱 Внутреннее сопротивление", callback_data="mid_resist")],
-                [InlineKeyboardButton("⚡ Мало времени", callback_data="mid_time")],
-                [InlineKeyboardButton("📱 Залип(ла) в телефоне", callback_data="mid_phone")],
-                [InlineKeyboardButton("🤖 Коуч", callback_data="mid_coach")],
-            ])
-        )
-    except Exception as e: print(f"Ошибка дневного уведомления: {e}")
+        except Exception as e:
+            print(f"Ошибка дневного уведомления для {uid}: {e}")
 
 async def midday_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Ответы на дневной чекин — ситуации и инструменты из реального тренинга."""
@@ -1052,53 +1069,53 @@ async def midday_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── SCHEDULED NOTIFICATIONS ────────────────────────────────────────────────
 async def morning_notification(app):
-    if not NOTIFY_USER_ID: return
-    try:
-        uid = NOTIFY_USER_ID
-        user = get_user(uid)
-        name = user.get("name", "")
-        gender = user.get("gender", "M")
+    user_ids = get_all_users()
+    for uid in user_ids:
+        try:
+            user = get_user(uid)
+            name = user.get("name", "")
+            gender = user.get("gender", "M")
 
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        ev = get_diary(uid, "evening", yesterday)
-        plan_text = ""
-        if ev.get("e_a"):
-            plan_text = f"\n\n⭐ *Сегодня тебе важно:*\n🅰️ {ev['e_a']}"
-            if ev.get("e_b1"): plan_text += f"\n🅱️ {ev['e_b1']}"
-            if ev.get("e_b2"): plan_text += f"\n🅱️ {ev['e_b2']}"
+            yesterday = (date.today() - timedelta(days=1)).isoformat()
+            ev = get_diary(uid, "evening", yesterday)
+            plan_text = ""
+            if ev.get("e_a"):
+                plan_text = f"\n\n⭐ *Сегодня тебе важно:*\n🅰️ {ev['e_a']}"
+                if ev.get("e_b1"): plan_text += f"\n🅱️ {ev['e_b1']}"
+                if ev.get("e_b2"): plan_text += f"\n🅱️ {ev['e_b2']}"
 
-        skill = get_daily_skill(uid)
-        motiv = random.choice(MOTIVATIONS_F if gender == 'F' else MOTIVATIONS_M)
+            skill = get_daily_skill(uid)
+            motiv = random.choice(MOTIVATIONS_F if gender == 'F' else MOTIVATIONS_M)
 
-        await app.bot.send_message(
-            uid,
-            f"☀️ *Доброе утро, {name}!*\n\n"
-            f"_{motiv}_{plan_text}\n\n"
-            f"💡 *Навык дня:* {skill['name']}\n"
-            f"_{skill['desc']}_\n\n"
-            f"Готов(а) начать? 👇",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
-    except Exception as e:
-        print(f"Ошибка утреннего уведомления: {e}")
+            await app.bot.send_message(
+                uid,
+                f"☀️ *Доброе утро, {name}!*\n\n"
+                f"_{motiv}_{plan_text}\n\n"
+                f"💡 *Навык дня:* {skill['name']}\n"
+                f"_{skill['desc']}_\n\n"
+                f"Готов(а) начать? 👇",
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
+        except Exception as e:
+            print(f"Ошибка утреннего уведомления для {uid}: {e}")
 
 async def evening_notification(app):
-    if not NOTIFY_USER_ID: return
-    try:
-        uid = NOTIFY_USER_ID
-        user = get_user(uid)
-        name = user.get("name", "")
-        await app.bot.send_message(
-            uid,
-            f"🌙 *Привет, {name}!*\n\n"
-            f"День заканчивается. Время закрыть его и поставить планы на завтра.\n\n"
-            f"5 минут — и голова свободна 👇",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
-    except Exception as e:
-        print(f"Ошибка вечернего уведомления: {e}")
+    user_ids = get_all_users()
+    for uid in user_ids:
+        try:
+            user = get_user(uid)
+            name = user.get("name", "")
+            await app.bot.send_message(
+                uid,
+                f"🌙 *Привет, {name}!*\n\n"
+                f"День заканчивается. Время закрыть его и поставить планы на завтра.\n\n"
+                f"5 минут — и голова свободна 👇",
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
+        except Exception as e:
+            print(f"Ошибка вечернего уведомления для {uid}: {e}")
 
 # ── MAIN ───────────────────────────────────────────────────────────────────
 def main():
@@ -1174,6 +1191,8 @@ def main():
     scheduler = AsyncIOScheduler()
     scheduler.add_job(morning_notification, 'cron',
                       hour=MORNING_HOUR_UTC, minute=0, args=[app])
+    scheduler.add_job(midday_notification, 'cron',
+                      hour=MIDDAY_HOUR_UTC, minute=0, args=[app])
     scheduler.add_job(evening_notification, 'cron',
                       hour=EVENING_HOUR_UTC, minute=0, args=[app])
     scheduler.start()
