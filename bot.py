@@ -240,8 +240,12 @@ def g(gender, male, female):
 def skip_kb(cb):
     return InlineKeyboardMarkup([[InlineKeyboardButton("Пропустить →", callback_data=cb)]])
 
+MINIAPP_URL = "https://adhd-miniapp.vercel.app"
+
 def main_menu():
+    from telegram import WebAppInfo
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📱 Открыть дневник", web_app=WebAppInfo(url=MINIAPP_URL))],
         [InlineKeyboardButton("☀️ Утро", callback_data="go_morning"),
          InlineKeyboardButton("🌙 Вечер", callback_data="go_evening")],
         [InlineKeyboardButton("🤖 Коуч", callback_data="go_coach"),
@@ -1117,6 +1121,39 @@ async def evening_notification(app):
         except Exception as e:
             print(f"Ошибка вечернего уведомления для {uid}: {e}")
 
+async def handle_web_app_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Принимает данные от Mini App и сохраняет в БД."""
+    uid = update.effective_user.id
+    raw = update.effective_message.web_app_data.data
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return
+
+    if data.get("type") == "morning":
+        focus = data.get("focus", "")
+        if focus:
+            update_user(uid, focus=focus)
+        save_diary(uid, "morning", {
+            "focus":    focus,
+            "b1":       data.get("b1", ""),
+            "b2":       data.get("b2", ""),
+            "c1":       data.get("c1", ""),
+            "writing":  data.get("writing", ""),
+            "gratitude":data.get("gratitude", ""),
+        })
+        user = get_user(uid)
+        tasks = ""
+        if focus: tasks += f"\n🅰️ {focus}"
+        if data.get("b1"): tasks += f"\n🅱️ {data['b1']}"
+        if data.get("b2"): tasks += f"\n🅱️ {data['b2']}"
+        await update.message.reply_text(
+            f"✅ *Утро записано!*{tasks}\n\nВперёд, {user['name']}! 💪",
+            parse_mode="Markdown",
+            reply_markup=main_menu()
+        )
+
+
 # ── MAIN ───────────────────────────────────────────────────────────────────
 def main():
     init_db()
@@ -1185,6 +1222,7 @@ def main():
     app.add_handler(CallbackQueryHandler(buddy_set,       pattern="^buddy_set$"))
     app.add_handler(CallbackQueryHandler(buddy_ping,      pattern="^buddy_ping$"))
     app.add_handler(CallbackQueryHandler(midday_callback, pattern="^mid_"))
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     # Уведомления (UTC время)
