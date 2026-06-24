@@ -245,13 +245,13 @@ MINIAPP_URL = "https://adhd-miniapp.vercel.app"
 def main_menu():
     from telegram import WebAppInfo
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📱 Открыть дневник", web_app=WebAppInfo(url=MINIAPP_URL))],
+        [InlineKeyboardButton("📱 Список Навыков", web_app=WebAppInfo(url=MINIAPP_URL))],
         [InlineKeyboardButton("☀️ Утро", callback_data="go_morning"),
          InlineKeyboardButton("🌙 Вечер", callback_data="go_evening")],
         [InlineKeyboardButton("🤖 Коуч", callback_data="go_coach"),
          InlineKeyboardButton("🧠 Навык дня", callback_data="go_skill")],
         [InlineKeyboardButton("👥 Бадди", callback_data="go_buddy"),
-         InlineKeyboardButton("🔥 Стрик", callback_data="go_streak")],
+         InlineKeyboardButton("🔥 Подряд", callback_data="go_streak")],
     ])
 
 def today_str():
